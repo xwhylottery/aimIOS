@@ -1,7 +1,7 @@
 --[[ ═══════════════════════════════════════════════════
-     Universal Mobile Menu v4.2 — FULL READY BUILD
-     Tabs: Aim | Visuals | Hitbox | HUD
-     Skeleton moved into Visuals
+     Universal Mobile Menu v4.3
+     Tabs: Aim | Visuals | Hitbox | HUD | Config
+     + Config Manager (save / load / delete profiles)
      ═══════════════════════════════════════════════════ ]]
 
 local Players          = game:GetService("Players")
@@ -11,6 +11,7 @@ local Camera           = workspace.CurrentCamera
 local LP               = Players.LocalPlayer
 local PlayerGui        = LP:WaitForChild("PlayerGui")
 
+-- ═══════ КОНФИГ (флаги) ═══════
 _G.CFG = {
     -- AIM
     aimEnabled=false, aimMode="Legit", aimKey="MouseRight",
@@ -25,7 +26,7 @@ _G.CFG = {
     espNameColor=Color3.fromRGB(255,255,255),
     espThickness=1,
 
-    -- SKELETON (внутри Visuals)
+    -- SKELETON
     skelEnabled=false,
     skelColor=Color3.fromRGB(255, 200, 0),
     skelThickness=1,
@@ -37,6 +38,153 @@ _G.CFG = {
     -- HUD
     _hudAction="Jump", _hudSize=70, _hudEdit=false,
 }
+
+-- ═══════ СИСТЕМА КОНФИГОВ ═══════
+local CONFIG_FOLDER = "UniversalMenu_Configs"
+local AUTOLOAD_FILE = CONFIG_FOLDER .. "/_autoload.txt"
+
+-- Безопасные обёртки (на случай если Delta не даёт writefile)
+local hasFS = (typeof(writefile) == "function")
+    and (typeof(readfile) == "function")
+    and (typeof(isfile) == "function")
+
+local function ensureFolder()
+    if not hasFS then return end
+    pcall(function()
+        if typeof(makefolder) == "function" and not isfolder(CONFIG_FOLDER) then
+            makefolder(CONFIG_FOLDER)
+        end
+    end)
+end
+
+-- Сериализация Color3 в таблицу
+local function serialize(val, depth)
+    depth = depth or 0
+    if depth > 6 then return "nil" end
+    local t = type(val)
+    if t == "number" or t == "boolean" or t == "nil" then
+        return tostring(val)
+    elseif t == "string" then
+        return string.format("%q", val)
+    elseif t == "table" then
+        local parts = {}
+        for k, v in pairs(val) do
+            local kk
+            if type(k) == "string" and k:match("^[%a_][%w_]*$") then
+                kk = k
+            else
+                kk = "[" .. serialize(k, depth+1) .. "]"
+            end
+            table.insert(parts, kk .. "=" .. serialize(v, depth+1))
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    elseif t == "userdata" and typeof(val) == "Color3" then
+        return string.format("Color3.fromRGB(%d,%d,%d)",
+            math.floor(val.R*255), math.floor(val.G*255), math.floor(val.B*255))
+    end
+    return "nil"
+end
+
+-- Только сохраняемые ключи (без служебных)
+local SAVE_KEYS = {
+    "aimEnabled","aimMode","aimKey","aimFov","aimSmooth","aimReaction",
+    "aimPart","aimWall","aimTeam","aimMaxDist","aimShowFov",
+    "espEnabled","espBox","espName","espDist","espHP","espMaxDist",
+    "espBoxColor","espNameColor","espThickness",
+    "skelEnabled","skelColor","skelThickness","skelMaxDist",
+    "hitboxEnabled","hitboxSize","hitboxTransparency","hitboxTeam",
+    "_hudAction","_hudSize",
+}
+
+local function buildSaveTable()
+    local out = {}
+    for _, k in ipairs(SAVE_KEYS) do
+        out[k] = _G.CFG[k]
+    end
+    return out
+end
+
+local function saveConfig(name)
+    if not hasFS then return false, "FS API недоступен" end
+    ensureFolder()
+    local data = buildSaveTable()
+    local ok, err = pcall(function()
+        writefile(CONFIG_FOLDER .. "/" .. name .. ".lua",
+            "return " .. serialize(data))
+    end)
+    if not ok then return false, tostring(err) end
+    return true
+end
+
+local function loadConfig(name)
+    if not hasFS then return false, "FS API недоступен" end
+    local path = CONFIG_FOLDER .. "/" .. name .. ".lua"
+    if not isfile(path) then return false, "Файл не найден" end
+
+    local ok, chunk = pcall(readfile, path)
+    if not ok then return false, tostring(chunk) end
+
+    local fn, err = loadstring(chunk)
+    if not fn then return false, "Ошибка загрузки: " .. tostring(err) end
+
+    local ok2, data = pcall(fn)
+    if not ok2 or type(data) ~= "table" then
+        return false, "Файл повреждён"
+    end
+
+    -- Применяем
+    for k, v in pairs(data) do
+        _G.CFG[k] = v
+    end
+
+    return true
+end
+
+local function deleteConfig(name)
+    if not hasFS then return false end
+    pcall(function()
+        delfile(CONFIG_FOLDER .. "/" .. name .. ".lua")
+    end)
+    return true
+end
+
+local function listConfigs()
+    if not hasFS then return {} end
+    ensureFolder()
+    local files = {}
+    pcall(function()
+        for _, f in ipairs(listfiles(CONFIG_FOLDER)) do
+            local name = f:match("([^/\\]+)%.lua$")
+            if name and name ~= "" then
+                table.insert(files, name)
+            end
+        end
+    end)
+    table.sort(files)
+    return files
+end
+
+local function setAutoload(name)
+    if not hasFS then return end
+    ensureFolder()
+    pcall(function()
+        if name and name ~= "" then
+            writefile(AUTOLOAD_FILE, name)
+        else
+            writefile(AUTOLOAD_FILE, "")
+        end
+    end)
+end
+
+local function getAutoload()
+    if not hasFS then return nil end
+    if not isfile(AUTOLOAD_FILE) then return nil end
+    local ok, content = pcall(readfile, AUTOLOAD_FILE)
+    if not ok then return nil end
+    content = content:gsub("%s+", "")
+    if content == "" then return nil end
+    return content
+end
 
 -- ═══════ GUI ═══════
 local ScreenGui = Instance.new("ScreenGui")
@@ -69,7 +217,7 @@ fovStroke.Color = Color3.fromRGB(255, 60, 60)
 fovStroke.Transparency = 0.3
 Instance.new("UICorner", fovCircle).CornerRadius = UDim.new(1, 0)
 
--- Main menu
+-- Main
 local main = Instance.new("Frame", ScreenGui)
 main.Size = UDim2.fromOffset(320, 420)
 main.Position = UDim2.new(0, 15, 0.5, -210)
@@ -84,7 +232,7 @@ local title = Instance.new("TextLabel", main)
 title.Size = UDim2.new(1, 0, 0, 36)
 title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 title.BorderSizePixel = 0
-title.Text = "  ⚙ Universal v4.2"
+title.Text = "  ⚙ Universal v4.3"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
@@ -151,11 +299,11 @@ Instance.new("UIListLayout", scroll).Padding = UDim.new(0, 5)
 local Pages = {}
 local function makeTab(name)
     local btn = Instance.new("TextButton", tabsHolder)
-    btn.Size = UDim2.fromOffset(72, 28)
+    btn.Size = UDim2.fromOffset(58, 28)
     btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
     btn.TextColor3 = Color3.new(1,1,1)
     btn.Font = Enum.Font.Gotham
-    btn.TextSize = 11
+    btn.TextSize = 10
     btn.Text = name
     btn.BorderSizePixel = 0
     btn.ZIndex = 12
@@ -185,7 +333,15 @@ local function makeTab(name)
     return page
 end
 
--- Elements
+-- ═══════ ELEMENTS ═══════
+-- Хранилище ссылок на UI-элементы для синхронизации после загрузки конфига
+local uiRefs = {
+    toggles = {},     -- key -> {btn=..., key=...}
+    sliders = {},     -- key -> {knob=..., fill=..., txt=..., min=..., max=..., key=...}
+    dropdowns = {},   -- key -> {btns={...}, txt=..., options={...}, key=...}
+    colors = {},      -- key -> {swatch=..., key=...}
+}
+
 local function makeToggle(parent, label, key)
     local frame = Instance.new("Frame", parent)
     frame.Size = UDim2.new(1, 0, 0, 34)
@@ -222,6 +378,8 @@ local function makeToggle(parent, label, key)
         btn.Text = _G.CFG[key] and "ON" or "OFF"
         btn.BackgroundColor3 = _G.CFG[key] and Color3.fromRGB(60, 180, 90) or Color3.fromRGB(60, 60, 70)
     end)
+
+    uiRefs.toggles[key] = {btn = btn, key = key}
 end
 
 local function makeSlider(parent, label, key, min, max, step)
@@ -289,6 +447,11 @@ local function makeSlider(parent, label, key, min, max, step)
         knob.Position = UDim2.new(rel, 0, 0.5, 0)
         txt.Text = label .. ": " .. tostring(math.floor(val * 100) / 100)
     end)
+
+    uiRefs.sliders[key] = {
+        knob = knob, fill = fill, txt = txt,
+        min = min, max = max, key = key, label = label,
+    }
 end
 
 local function makeDropdown(parent, label, key, options)
@@ -328,7 +491,7 @@ local function makeDropdown(parent, label, key, options)
         b.Text = tostring(opt)
         b.TextColor3 = Color3.new(1,1,1)
         b.Font = Enum.Font.Gotham
-        b.TextSize = 11
+        b.TextSize = 10
         b.BorderSizePixel = 0
         b.ZIndex = 14
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
@@ -342,6 +505,10 @@ local function makeDropdown(parent, label, key, options)
         end)
         table.insert(btns, b)
     end
+
+    uiRefs.dropdowns[key] = {
+        btns = btns, txt = txt, options = options, key = key, label = label,
+    }
 end
 
 local function makeColor(parent, label, key)
@@ -393,13 +560,16 @@ local function makeColor(parent, label, key)
         _G.CFG[key] = colors[idx]
         swatch.BackgroundColor3 = colors[idx]
     end)
+
+    uiRefs.colors[key] = {swatch = swatch, key = key, colors = colors}
 end
 
--- Build tabs
-local aimTab = makeTab("Aim")
-local visTab = makeTab("Visuals")
-local hitTab = makeTab("Hitbox")
-local hudTab = makeTab("HUD")
+-- ═══════ BUILD TABS ═══════
+local aimTab   = makeTab("Aim")
+local visTab   = makeTab("Visuals")
+local hitTab   = makeTab("Hitbox")
+local hudTab   = makeTab("HUD")
+local cfgTab   = makeTab("Config")
 
 -- AIM
 makeToggle(aimTab, "Enable Aim", "aimEnabled")
@@ -414,7 +584,7 @@ makeSlider(aimTab, "Max Dist", "aimMaxDist", 50, 2000, 1)
 makeToggle(aimTab, "Wall Check", "aimWall")
 makeToggle(aimTab, "Team Check", "aimTeam")
 
--- VISUALS (ESP + Skeleton в одной вкладке)
+-- VISUALS
 makeToggle(visTab, "Enable ESP", "espEnabled")
 makeToggle(visTab, "Box", "espBox")
 makeToggle(visTab, "Name", "espName")
@@ -424,9 +594,9 @@ makeSlider(visTab, "Max Dist", "espMaxDist", 50, 2000, 1)
 makeSlider(visTab, "Thickness", "espThickness", 1, 5, 1)
 
 makeToggle(visTab, "Enable Skeleton", "skelEnabled")
-makeSlider(visTab, "Skeleton Max Dist", "skelMaxDist", 50, 2000, 1)
-makeSlider(visTab, "Skeleton Thickness", "skelThickness", 1, 5, 1)
-makeColor(visTab, "Skeleton Color", "skelColor")
+makeSlider(visTab, "Skel Max Dist", "skelMaxDist", 50, 2000, 1)
+makeSlider(visTab, "Skel Thickness", "skelThickness", 1, 5, 1)
+makeColor(visTab, "Skel Color", "skelColor")
 
 -- HITBOX
 makeToggle(hitTab, "Enable Hitbox", "hitboxEnabled")
@@ -434,6 +604,321 @@ makeSlider(hitTab, "Size", "hitboxSize", 1, 30, 1)
 makeSlider(hitTab, "Transparency", "hitboxTransparency", 0, 1, 0.05)
 makeToggle(hitTab, "Team Check", "hitboxTeam")
 
+-- ═══════ CONFIG UI ═══════
+local configListHolder  -- будет ниже
+local nameInput
+local statusLabel
+
+-- Функция синхронизации UI со значениями _G.CFG (после загрузки)
+local function syncUI()
+    -- toggles
+    for key, ref in pairs(uiRefs.toggles) do
+        local v = _G.CFG[key]
+        if ref.btn then
+            ref.btn.Text = v and "ON" or "OFF"
+            ref.btn.BackgroundColor3 = v
+                and Color3.fromRGB(60, 180, 90)
+                or  Color3.fromRGB(60, 60, 70)
+        end
+    end
+    -- sliders
+    for key, ref in pairs(uiRefs.sliders) do
+        local v = _G.CFG[key]
+        if ref.knob and ref.fill and ref.txt then
+            local rel = math.clamp((v - ref.min) / (ref.max - ref.min), 0, 1)
+            ref.fill.Size = UDim2.new(rel, 0, 1, 0)
+            ref.knob.Position = UDim2.new(rel, 0, 0.5, 0)
+            ref.txt.Text = ref.label .. ": " .. tostring(math.floor(v * 100) / 100)
+        end
+    end
+    -- dropdowns
+    for key, ref in pairs(uiRefs.dropdowns) do
+        local v = _G.CFG[key]
+        if ref.txt then
+            ref.txt.Text = ref.label .. ": " .. tostring(v)
+        end
+        if ref.btns then
+            for i, b in ipairs(ref.btns) do
+                local opt = ref.options[i]
+                b.BackgroundColor3 = (opt == v)
+                    and Color3.fromRGB(60, 130, 200)
+                    or  Color3.fromRGB(50, 50, 60)
+            end
+        end
+    end
+    -- colors
+    for key, ref in pairs(uiRefs.colors) do
+        if ref.swatch then
+            ref.swatch.BackgroundColor3 = _G.CFG[key]
+        end
+    end
+end
+
+-- Хедер
+do
+    local h = Instance.new("TextLabel", cfgTab)
+    h.Size = UDim2.new(1, 0, 0, 24)
+    h.BackgroundTransparency = 1
+    h.Text = "💾 Управление профилями"
+    h.TextColor3 = Color3.fromRGB(120, 200, 255)
+    h.Font = Enum.Font.GothamBold
+    h.TextSize = 13
+    h.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+-- Статус FS
+do
+    local info = Instance.new("Frame", cfgTab)
+    info.Size = UDim2.new(1, 0, 0, 30)
+    info.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    info.BorderSizePixel = 0
+    Instance.new("UICorner", info).CornerRadius = UDim.new(0, 6)
+
+    local lbl = Instance.new("TextLabel", info)
+    lbl.Size = UDim2.new(1, -10, 1, 0)
+    lbl.Position = UDim2.fromOffset(8, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = hasFS
+        and "✅ Файловая система доступна"
+        or  "❌ writefile/readfile недоступны в этом инжекторе"
+    lbl.TextColor3 = hasFS
+        and Color3.fromRGB(120, 220, 120)
+        or  Color3.fromRGB(220, 100, 100)
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+-- Input для имени
+do
+    local inputFrame = Instance.new("Frame", cfgTab)
+    inputFrame.Size = UDim2.new(1, 0, 0, 36)
+    inputFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    inputFrame.BorderSizePixel = 0
+    Instance.new("UICorner", inputFrame).CornerRadius = UDim.new(0, 6)
+
+    local tb = Instance.new("TextBox", inputFrame)
+    tb.Size = UDim2.new(1, -20, 1, -8)
+    tb.Position = UDim2.fromOffset(10, 4)
+    tb.BackgroundColor3 = Color3.fromRGB(25, 25, 33)
+    tb.BorderSizePixel = 0
+    tb.Text = ""
+    tb.PlaceholderText = "Имя профиля (например: Legit)"
+    tb.TextColor3 = Color3.new(1,1,1)
+    tb.PlaceholderColor3 = Color3.fromRGB(130, 130, 130)
+    tb.Font = Enum.Font.Gotham
+    tb.TextSize = 12
+    tb.TextXAlignment = Enum.TextXAlignment.Left
+    tb.ClearTextOnFocus = false
+    Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 5)
+    local p = Instance.new("UIPadding", tb)
+    p.PaddingLeft = UDim.new(0, 8)
+
+    nameInput = tb
+end
+
+-- Кнопка Save
+do
+    local btnFrame = Instance.new("Frame", cfgTab)
+    btnFrame.Size = UDim2.new(1, 0, 0, 40)
+    btnFrame.BackgroundColor3 = Color3.fromRGB(60, 180, 90)
+    btnFrame.BorderSizePixel = 0
+    Instance.new("UICorner", btnFrame).CornerRadius = UDim.new(0, 6)
+
+    local btn = Instance.new("TextButton", btnFrame)
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = "💾 Сохранить текущие настройки"
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+
+    btn.MouseButton1Click:Connect(function()
+        if not hasFS then return end
+        local name = nameInput.Text
+        if not name or name == "" then
+            statusLabel.Text = "⚠ Введи имя профиля"
+            statusLabel.TextColor3 = Color3.fromRGB(220, 180, 100)
+            return
+        end
+        -- чистим имя от запрещённых символов
+        name = name:gsub("[^%w_%-]", "")
+        if name == "" then
+            statusLabel.Text = "⚠ Только буквы/цифры/_-"
+            return
+        end
+        local ok, err = saveConfig(name)
+        if ok then
+            statusLabel.Text = "✅ Сохранено: " .. name
+            statusLabel.TextColor3 = Color3.fromRGB(120, 220, 120)
+            if _G._refreshConfigList then _G._refreshConfigList() end
+        else
+            statusLabel.Text = "❌ Ошибка: " .. tostring(err)
+            statusLabel.TextColor3 = Color3.fromRGB(220, 100, 100)
+        end
+    end)
+end
+
+-- Хедер списка
+do
+    local h = Instance.new("TextLabel", cfgTab)
+    h.Size = UDim2.new(1, 0, 0, 22)
+    h.BackgroundTransparency = 1
+    h.Text = "📁 Сохранённые профили"
+    h.TextColor3 = Color3.fromRGB(180, 180, 180)
+    h.Font = Enum.Font.GothamBold
+    h.TextSize = 12
+    h.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+-- Контейнер списка
+configListHolder = Instance.new("Frame", cfgTab)
+configListHolder.Size = UDim2.new(1, 0, 0, 0)
+configListHolder.BackgroundTransparency = 1
+configListHolder.AutomaticSize = Enum.AutomaticSize.Y
+Instance.new("UIListLayout", configListHolder).Padding = UDim.new(0, 4)
+
+-- Функция перерисовки списка
+local function refreshConfigList()
+    for _, child in ipairs(configListHolder:GetChildren()) do
+        if child:IsA("Frame") or child:IsA("TextLabel") then
+            child:Destroy()
+        end
+    end
+
+    local list = listConfigs()
+    local autoloadName = getAutoload()
+
+    if #list == 0 then
+        local empty = Instance.new("TextLabel", configListHolder)
+        empty.Size = UDim2.new(1, 0, 0, 30)
+        empty.BackgroundTransparency = 1
+        empty.Text = "(нет сохранённых профилей)"
+        empty.TextColor3 = Color3.fromRGB(120, 120, 120)
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 11
+        empty.TextXAlignment = Enum.TextXAlignment.Left
+        return
+    end
+
+    for _, name in ipairs(list) do
+        local row = Instance.new("Frame", configListHolder)
+        row.Size = UDim2.new(1, 0, 0, 40)
+        row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        row.BorderSizePixel = 0
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+
+        local isAuto = (autoloadName == name)
+
+        local nameLbl = Instance.new("TextLabel", row)
+        nameLbl.Size = UDim2.new(0.4, 0, 1, 0)
+        nameLbl.Position = UDim2.fromOffset(8, 0)
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Text = (isAuto and "⭐ " or "📄 ") .. name
+        nameLbl.TextColor3 = isAuto
+            and Color3.fromRGB(255, 220, 120)
+            or  Color3.new(1,1,1)
+        nameLbl.Font = Enum.Font.GothamBold
+        nameLbl.TextSize = 12
+        nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+        -- Load
+        local loadBtn = Instance.new("TextButton", row)
+        loadBtn.Size = UDim2.fromOffset(46, 28)
+        loadBtn.Position = UDim2.new(1, -158, 0.5, -14)
+        loadBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 200)
+        loadBtn.Text = "Load"
+        loadBtn.TextColor3 = Color3.new(1,1,1)
+        loadBtn.Font = Enum.Font.GothamBold
+        loadBtn.TextSize = 10
+        loadBtn.BorderSizePixel = 0
+        Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 5)
+
+        loadBtn.MouseButton1Click:Connect(function()
+            local ok, err = loadConfig(name)
+            if ok then
+                syncUI()
+                statusLabel.Text = "✅ Загружено: " .. name
+                statusLabel.TextColor3 = Color3.fromRGB(120, 220, 120)
+            else
+                statusLabel.Text = "❌ " .. tostring(err)
+                statusLabel.TextColor3 = Color3.fromRGB(220, 100, 100)
+            end
+        end)
+
+        -- Autoload toggle
+        local autoBtn = Instance.new("TextButton", row)
+        autoBtn.Size = UDim2.fromOffset(50, 28)
+        autoBtn.Position = UDim2.new(1, -108, 0.5, -14)
+        autoBtn.BackgroundColor3 = isAuto
+            and Color3.fromRGB(200, 160, 40)
+            or  Color3.fromRGB(60, 60, 70)
+        autoBtn.Text = isAuto and "★ Auto" or "Auto"
+        autoBtn.TextColor3 = Color3.new(1,1,1)
+        autoBtn.Font = Enum.Font.GothamBold
+        autoBtn.TextSize = 9
+        autoBtn.BorderSizePixel = 0
+        Instance.new("UICorner", autoBtn).CornerRadius = UDim.new(0, 5)
+
+        autoBtn.MouseButton1Click:Connect(function()
+            if isAuto then
+                setAutoload("")
+                statusLabel.Text = "ℹ Автозагрузка отключена"
+            else
+                setAutoload(name)
+                statusLabel.Text = "⭐ Автозагрузка: " .. name
+            end
+            statusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+            refreshConfigList()
+        end)
+
+        -- Delete
+        local delBtn = Instance.new("TextButton", row)
+        delBtn.Size = UDim2.fromOffset(40, 28)
+        delBtn.Position = UDim2.new(1, -54, 0.5, -14)
+        delBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+        delBtn.Text = "🗑"
+        delBtn.TextColor3 = Color3.new(1,1,1)
+        delBtn.Font = Enum.Font.GothamBold
+        delBtn.TextSize = 12
+        delBtn.BorderSizePixel = 0
+        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 5)
+
+        delBtn.MouseButton1Click:Connect(function()
+            deleteConfig(name)
+            if getAutoload() == name then setAutoload("") end
+            statusLabel.Text = "🗑 Удалено: " .. name
+            statusLabel.TextColor3 = Color3.fromRGB(220, 140, 100)
+            refreshConfigList()
+        end)
+    end
+end
+
+_G._refreshConfigList = refreshConfigList
+
+-- Статус label
+do
+    local st = Instance.new("Frame", cfgTab)
+    st.Size = UDim2.new(1, 0, 0, 26)
+    st.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    st.BorderSizePixel = 0
+    Instance.new("UICorner", st).CornerRadius = UDim.new(0, 5)
+
+    local lbl = Instance.new("TextLabel", st)
+    lbl.Size = UDim2.new(1, -10, 1, 0)
+    lbl.Position = UDim2.fromOffset(8, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "Готово"
+    lbl.TextColor3 = Color3.fromRGB(160, 160, 160)
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    statusLabel = lbl
+end
+
+-- Активная вкладка — Aim
 Pages.Aim.Visible = true
 for _, b in ipairs(tabsHolder:GetChildren()) do
     if b:IsA("TextButton") and b.Text == "Aim" then
@@ -441,7 +926,13 @@ for _, b in ipairs(tabsHolder:GetChildren()) do
     end
 end
 
--- FOV update
+-- Первичный рендер списка
+task.spawn(function()
+    task.wait(0.3)
+    refreshConfigList()
+end)
+
+-- ═══════ FOV ═══════
 RunService.RenderStepped:Connect(function()
     if not _G.CFG.aimShowFov then fovCircle.Visible = false; return end
     fovCircle.Visible = true
@@ -453,7 +944,7 @@ RunService.RenderStepped:Connect(function()
     fovCircle.Size = UDim2.fromOffset(radiusPx * 2, radiusPx * 2)
 end)
 
--- Aim
+-- ═══════ AIM LOGIC ═══════
 local aimParams = RaycastParams.new()
 aimParams.FilterType = Enum.RaycastFilterType.Exclude
 aimParams.IgnoreWater = true
@@ -623,31 +1114,22 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ═══════ SKELETON ESP ═══════
+-- ═══════ SKELETON ═══════
 local skelCache = {}
-
 local R15_BONES = {
-    {"Head", "UpperTorso"},
-    {"UpperTorso", "LowerTorso"},
-    {"UpperTorso", "LeftUpperArm"},
-    {"LeftUpperArm", "LeftLowerArm"},
-    {"LeftLowerArm", "LeftHand"},
-    {"UpperTorso", "RightUpperArm"},
-    {"RightUpperArm", "RightLowerArm"},
-    {"RightLowerArm", "RightHand"},
-    {"LowerTorso", "LeftUpperLeg"},
-    {"LeftUpperLeg", "LeftLowerLeg"},
-    {"LeftLowerLeg", "LeftFoot"},
-    {"LowerTorso", "RightUpperLeg"},
-    {"RightUpperLeg", "RightLowerLeg"},
-    {"RightLowerLeg", "RightFoot"},
+    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
+    {"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},
+    {"LeftLowerArm","LeftHand"},
+    {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},
+    {"RightLowerArm","RightHand"},
+    {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},
+    {"LeftLowerLeg","LeftFoot"},
+    {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},
+    {"RightLowerLeg","RightFoot"},
 }
 local R6_BONES = {
-    {"Head", "Torso"},
-    {"Torso", "Left Arm"},
-    {"Torso", "Right Arm"},
-    {"Torso", "Left Leg"},
-    {"Torso", "Right Leg"},
+    {"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},
+    {"Torso","Left Leg"},{"Torso","Right Leg"},
 }
 
 local function makeSkelHolder()
@@ -788,11 +1270,10 @@ end)
 
 -- ═══════ HUD ═══════
 local HUD_ACTIONS = {
-    "Jump", "Attack (Tool)", "Shoot (Click)", "Aim (RMB)",
-    "Forward", "Back", "Left", "Right",
-    "Shift Lock", "Reload", "Interact",
+    "Jump","Attack (Tool)","Shoot (Click)","Aim (RMB)",
+    "Forward","Back","Left","Right",
+    "Shift Lock","Reload","Interact",
 }
-
 local customBtns, nextBtnId, EDIT_MODE = {}, 0, false
 
 local function fireAction(action, isDown)
@@ -1107,4 +1588,20 @@ task.spawn(function()
     end
 end)
 
-print("[Universal v4.2] loaded — Skeleton merged into Visuals")
+-- ═══════ АВТОЗАГРУЗКА ═══════
+task.spawn(function()
+    task.wait(0.5)
+    local auto = getAutoload()
+    if auto then
+        local ok = loadConfig(auto)
+        if ok then
+            syncUI()
+            statusLabel.Text = "⭐ Автозагружено: " .. auto
+            statusLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
+            print("[Universal v4.3] Autoloaded config:", auto)
+        end
+    end
+end)
+
+print("[Universal v4.3] loaded — Config Manager active")
+print("[Universal v4.3] FS support:", hasFS)
